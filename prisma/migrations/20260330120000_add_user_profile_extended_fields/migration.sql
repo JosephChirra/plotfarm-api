@@ -1,0 +1,12 @@
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'AccountType') THEN
+    CREATE TYPE "AccountType" AS ENUM ('BUYER', 'SELLER', 'BOTH');
+  END IF;
+END$$;
+
+ALTER TABLE "UserProfile" ADD COLUMN IF NOT EXISTS "mandal" TEXT;
+ALTER TABLE "UserProfile" ADD COLUMN IF NOT EXISTS "village" TEXT;
+ALTER TABLE "UserProfile" ADD COLUMN IF NOT EXISTS "alternatePhone" TEXT;
+ALTER TABLE "UserProfile" ADD COLUMN IF NOT EXISTS "showPhonePublicly" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "UserProfile" ADD COLUMN IF NOT EXISTS "accountType" "AccountType" NOT NULL DEFAULT 'BUYER';

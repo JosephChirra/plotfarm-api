@@ -1,0 +1,86 @@
+name: Deploy API — dev
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'Dockerfile'
+      - 'package*.json'
+      - 'nest-cli.json'
+      - 'tsconfig*.json'
+      - '.github/workflows/deploy-api-dev.yml'
+
+jobs:
+  deploy:
+    name: Deploy NestJS API to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Write .env.dev to EC2 ─────────────────────────────────────────────
+      - name: Write .env.dev to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          ENV_FILE_DEV: ${{ secrets.ENV_FILE_DEV }}
+        with:
+          host:        ${{ secrets.EC2_HOST }}
+          username:    ubuntu
+          key:         ${{ secrets.EC2_SSH_KEY }}
+          port:        22
+          envs:        ENV_FILE_DEV
+          script: |
+            echo "$ENV_FILE_DEV" > /opt/plotfarm/plotfarm-api/.env.dev
+            chmod 600 /opt/plotfarm/plotfarm-api/.env.dev
+            echo "✅ .env.dev written"
+
+      # ── 3. Deploy via SSH ────────────────────────────────────────────────────
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:        ${{ secrets.EC2_HOST }}
+          username:    ubuntu
+          key:         ${{ secrets.EC2_SSH_KEY }}
+          port:        22
+          command_timeout: 30m
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            echo "── Pulling latest code ──"
+            cd /opt/plotfarm/plotfarm-api
+            git fetch origin dev
+            git reset --hard origin/dev
+
+            echo "── Pruning build cache before build ──"
+            docker builder prune -af --filter until=24h || true
+
+            echo "── Rebuilding Docker image ──"
+            docker compose -f /opt/plotfarm/plotfarm-api/docker-compose.prod.yml build --no-cache api
+
+            echo "── Restarting service ──"
+            docker compose -f /opt/plotfarm/plotfarm-api/docker-compose.prod.yml up -d --remove-orphans
+
+            echo "── Running Prisma migrations ──"
+            docker compose -f /opt/plotfarm/plotfarm-api/docker-compose.prod.yml exec -T api \
+              npx prisma migrate deploy
+
+            echo "── Pruning unused images and build cache ──"
+            docker image prune -f
+            docker builder prune -af --filter until=1h || true
+
+            echo "── Health check ──"
+            sleep 10
+            curl -sf http://localhost:3001/ || (echo "Health check failed!" && exit 1)
+
+            echo "✅ Deployment complete"
+
+      # ── 3. Notify on failure ─────────────────────────────────────────────────
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Deployment to dev EC2 failed on commit ${{ github.sha }}"

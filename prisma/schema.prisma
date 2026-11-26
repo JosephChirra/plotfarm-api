@@ -1,0 +1,900 @@
+// PlotFarm Prisma Schema — PostgreSQL (set DATABASE_URL in plotfarm-api/.env)
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+  PENDING
+}
+
+enum KycStatus {
+  NOT_SUBMITTED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum AccountType {
+  BUYER
+  SELLER
+  BOTH
+}
+
+enum OtpChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum OtpPurpose {
+  REGISTRATION
+  PHONE_LOGIN
+  EMAIL_CHANGE
+}
+
+enum PostType {
+  SALE
+  RENT
+  LEASE
+}
+
+enum PropertyType {
+  FARM_LAND
+  PLOT
+}
+
+enum LandUnit {
+  sq_ft
+  acres
+  sq_yards
+}
+
+enum OwnershipType {
+  OWNER
+  DEALER
+}
+
+enum IrrigationType {
+  BOREWELL
+  CANAL
+  RAIN
+}
+
+enum PlotFacing {
+  EAST
+  WEST
+  NORTH
+  SOUTH
+}
+
+enum PropertyStatus {
+  DRAFT
+  PUBLISHED
+  INACTIVE
+  REJECTED
+  SOLD
+}
+
+enum ProjectStatus {
+  DRAFT
+  PUBLISHED
+  INACTIVE
+  REJECTED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  DOCUMENT
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  NEGOTIATION
+  CLOSED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum ReportTargetType {
+  PROPERTY
+  USER
+}
+
+enum ReportReason {
+  SPAM
+  FRAUD
+  INCORRECT_INFO
+  OFFENSIVE
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  REJECTED
+}
+
+enum ReportResolutionAction {
+  NONE
+  REMOVE_PROPERTY
+  TOMBSTONE_PROPERTY
+  FLAG_PROPERTY
+  WARNING
+  SUSPEND_USER
+  TEMP_SUSPEND_USER
+  PERM_BAN_USER
+}
+
+enum ReportPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum CreditTransactionType {
+  SIGNUP_BONUS
+  REFERRAL_REWARD
+  REFEREE_BONUS
+  LISTING_SPEND
+  LISTING_REFUND
+  LISTING_RENEWAL
+  POST_SPEND
+  POST_REFUND
+  POST_RENEWAL
+  PURCHASE
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+  EARNED_LISTING
+  EARNED_PROFILE_COMPLETE
+  SPENT_FEATURE_LISTING
+  EARNED_POST
+  SPENT_FEATURE_POST
+  SPENT_CONTACT_REVEAL
+  EXPIRED
+}
+
+enum ReferralStatus {
+  PENDING
+  IN_PROGRESS
+  UNDER_REVIEW
+  COMPLETED
+  REJECTED
+  EXPIRED
+  FLAGGED
+}
+
+enum WalletTransactionDirection {
+  CREDIT
+  DEBIT
+}
+
+// =============================================================================
+// 1. USERS & AUTHENTICATION
+// =============================================================================
+
+model User {
+  id             String    @id @default(uuid())
+  fullName       String
+  email          String?   @unique
+  phone          String?   @unique
+  passwordHash   String
+  state          String    @default("")
+  district       String    @default("")
+  role           UserRole  @default(USER)
+  isVerified     Boolean   @default(false)
+  isSuspended    Boolean   @default(false)
+  status         UserStatus @default(ACTIVE)
+  strikeCount    Int       @default(0)
+  trustScore     Int       @default(100)
+  suspensionExpiresAt DateTime?
+  isEmailVerified Boolean  @default(false)
+  isPhoneVerified Boolean  @default(false)
+  needsProfileCompletion Boolean @default(false)
+  passwordResetToken  String?   @unique
+  passwordResetExpiry DateTime?
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Credit system
+  creditBalance  Int       @default(0)
+
+  // Referral fields
+  referralCode   String?   @unique
+  referredById   String?
+  referredBy     User?     @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals      User[]    @relation("UserReferrals")
+
+  profile       UserProfile?
+  devices       UserDevice[]
+  properties    Property[]
+  projects      Project[]
+  propertyLeads PropertyLead[]
+  favorites     PropertyFavorite[]
+  interests     PropertyInterest[]
+  subscriptions UserSubscription[]
+  activityLogs  ActivityLog[]
+  notifications Notification[]
+  notificationPreferences NotificationPreference[]
+  deviceTokens  DeviceToken[]
+  verificationLogs PropertyVerificationLog[]
+  leadMessages  PropertyLeadMessage[]
+  reportsFiled  Report[] @relation("ReportReporter")
+  reportsReviewed Report[] @relation("ReportReviewer")
+  moderationLogs ModerationLog[] @relation("ModerationLogAdmin")
+  creditTransactions CreditTransaction[]
+  referralsMade      ReferralRecord[] @relation("ReferrerRecords")
+  referralReceived   ReferralRecord? @relation("RefereeRecord")
+  creditPurchases    CreditPurchase[]
+
+  blocksInitiated BlockedUser[] @relation("BlocksInitiated")
+  blocksReceived  BlockedUser[] @relation("BlocksReceived")
+}
+
+model AuthOtpChallenge {
+  id         String     @id @default(uuid())
+  channel    OtpChannel
+  purpose    OtpPurpose
+  target     String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int        @default(0)
+  maxAttempts Int       @default(5)
+  metadata   Json?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@index([channel, purpose, target, createdAt(sort: Desc)])
+  @@index([expiresAt])
+}
+
+model BlockedUser {
+  blockerId   String
+  blocker     User     @relation("BlocksInitiated", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId   String
+  blocked     User     @relation("BlocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@id([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+model UserProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profileImageUrl String?
+  bio             String?
+  address         String?
+  city            String?
+  state           String?
+  country         String?
+  mandal          String?
+  village         String?
+  alternatePhone  String?
+  showPhonePublicly Boolean @default(false)
+  accountType     AccountType @default(BUYER)
+  pincode         String?
+  kycStatus       KycStatus @default(NOT_SUBMITTED)
+  kycDocumentUrl  String?
+  createdAt       DateTime  @default(now())
+}
+
+model UserDevice {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId    String?
+  deviceType  String?
+  ipAddress   String?
+  userAgent   String?
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// =============================================================================
+// 2. PROPERTY CORE
+// =============================================================================
+
+/// Land type taxonomy (e.g. PLOT, FARM_LAND). Table name is historical.
+model PropertyCategory {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  properties Property[]
+}
+
+model Property {
+  id                 String            @id @default(uuid())
+  ownerId            String?
+  owner              User?             @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  projectId          String?
+  project            Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectName        String?
+  /// Land type id (FK to PropertyCategory)
+  categoryId         Int?
+  category           PropertyCategory? @relation(fields: [categoryId], references: [id])
+  title              String
+  description        String?
+  price              Decimal?
+  postType           PostType
+  propertyType       PropertyType        @default(FARM_LAND)
+  landArea           Decimal
+  landUnit           String?             @default("sq_ft")
+  guntas             Int?
+  landAreaSqFt       Decimal?
+  state              String              @default("")
+  district           String              @default("")
+  mandal             String              @default("")
+  village            String?
+  contactName        String              @default("")
+  contactPhone       String              @default("")
+  ownershipType      OwnershipType       @default(OWNER)
+  nearbyLandmark     String?
+  soilType           String?
+  waterAvailability  Boolean?
+  irrigationType     IrrigationType?
+  cropHistory        String?
+  gatedCommunity     Boolean?
+  roadAccess         Boolean?
+  electricityAvailable Boolean?
+  facing             String?
+  status             PropertyStatus    @default(DRAFT)
+  verificationStatus VerificationStatus @default(PENDING)
+  rejectionReason    String?
+  isFeatured         Boolean            @default(false)
+  isBlocked          Boolean            @default(false)
+  isDeleted          Boolean            @default(false)
+  
+  // Credit link
+  creditTransactionId String?           @unique
+  creditTransaction   CreditTransaction? @relation(fields: [creditTransactionId], references: [id])
+
+  views              Int               @default(0)
+  slug               String?           @unique
+  seoMetaTitle       String?
+  seoMetaDescription String?
+  images             Json?
+  publishedAt        DateTime?
+  expiresAt          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  location      PropertyLocation?
+  media         PropertyMedia[]
+  facings       PropertyFacing[]
+  featureMapping PropertyFeatureMapping[]
+  verificationLogs PropertyVerificationLog[]
+  leads         PropertyLead[]
+  favorites     PropertyFavorite[]
+  interests     PropertyInterest[]
+
+  @@index([projectId])
+  @@index([isBlocked])
+  @@index([ownerId])
+  @@index([status])
+  @@index([verificationStatus])
+  @@index([price])
+  @@index([landArea])
+  @@index([createdAt])
+}
+
+model PropertyLocation {
+  id               String   @id @default(uuid())
+  propertyId       String   @unique
+  property         Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  address          String?
+  village          String?
+  mandal           String?
+  district         String?
+  state            String?
+  country          String?
+  area             String?
+  pincode          String?
+  place_id         String?
+  formatted_address String?
+  latitude         Decimal?
+  longitude        Decimal?
+}
+
+model PropertyFacing {
+  id          Int         @id @default(autoincrement())
+  propertyId  String
+  property    Property    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  direction   PlotFacing
+  roadWidth   Decimal?    // road width in feet on this side
+
+  @@index([propertyId])
+  @@index([direction])
+}
+
+model PropertyMedia {
+  id           String     @id @default(uuid())
+  propertyId   String
+  property     Property   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  mediaUrl     String
+  thumbnailUrl String?
+  mediaType    MediaType?
+  isPrimary    Boolean    @default(false)
+  sortOrder    Int        @default(0)
+  createdAt    DateTime   @default(now())
+
+  @@index([propertyId, sortOrder])
+}
+
+model PropertyFeature {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  mapping   PropertyFeatureMapping[]
+}
+
+model PropertyFeatureMapping {
+  propertyId String
+  featureId  Int
+  property   Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  feature    PropertyFeature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([propertyId, featureId])
+}
+
+// =============================================================================
+// 2b. REAL ESTATE PROJECTS
+// =============================================================================
+
+model Project {
+  id                 String             @id @default(uuid())
+  ownerId            String?
+  owner              User?              @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  title              String
+  description        String?
+  slug               String?            @unique
+  developerName      String?
+  contactName        String             @default("")
+  contactPhone       String             @default("")
+  status             ProjectStatus      @default(DRAFT)
+  verificationStatus VerificationStatus @default(PENDING)
+  rejectionReason    String?
+  isFeatured         Boolean            @default(false)
+  isBlocked          Boolean            @default(false)
+  isDeleted          Boolean            @default(false)
+  state              String             @default("")
+  district           String             @default("")
+  mandal             String             @default("")
+  village            String?
+  totalPlots         Int?
+  availablePlots     Int?
+  priceFrom          Decimal?
+  priceTo            Decimal?
+  views              Int                @default(0)
+  publishedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  location       ProjectLocation?
+  media          ProjectMedia[]
+  featureMapping ProjectFeatureMapping[]
+  properties     Property[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([verificationStatus])
+  @@index([isFeatured])
+  @@index([isBlocked])
+  @@index([isDeleted])
+  @@index([createdAt])
+}
+
+model ProjectLocation {
+  id                String   @id @default(uuid())
+  projectId         String   @unique
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  address           String?
+  village           String?
+  mandal            String?
+  district          String?
+  state             String?
+  country           String?
+  area              String?
+  pincode           String?
+  place_id          String?
+  formatted_address String?
+  latitude          Decimal?
+  longitude         Decimal?
+}
+
+model ProjectMedia {
+  id           String     @id @default(uuid())
+  projectId    String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  mediaUrl     String
+  thumbnailUrl String?
+  mediaType    MediaType?
+  isPrimary    Boolean    @default(false)
+  sortOrder    Int        @default(0)
+  createdAt    DateTime   @default(now())
+
+  @@index([projectId, sortOrder])
+}
+
+model ProjectFeature {
+  id      Int                     @id @default(autoincrement())
+  name    String                  @unique
+  mapping ProjectFeatureMapping[]
+}
+
+model ProjectFeatureMapping {
+  projectId String
+  featureId Int
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature   ProjectFeature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, featureId])
+}
+
+// =============================================================================
+// 3. PROPERTY VERIFICATION
+// =============================================================================
+
+model PropertyVerificationLog {
+  id          String   @id @default(uuid())
+  propertyId  String
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  verifiedById String?
+  verifiedBy  User?    @relation(fields: [verifiedById], references: [id], onDelete: SetNull)
+  status      String   // VERIFIED | REJECTED
+  remarks     String?
+  createdAt   DateTime @default(now())
+}
+
+// =============================================================================
+// 4. LEADS & FAVORITES
+// =============================================================================
+
+model PropertyLead {
+  id           String     @id @default(uuid())
+  propertyId   String
+  property     Property   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  buyerId      String?
+  buyer        User?      @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  guestName    String?
+  guestEmail   String?
+  guestPhone   String?
+  message      String?
+  contactPhone String?
+  status       LeadStatus @default(NEW)
+  ownerReadAt  DateTime?
+  buyerReadAt  DateTime?
+  createdAt    DateTime   @default(now())
+
+  messages PropertyLeadMessage[]
+
+  @@index([propertyId])
+  @@index([buyerId])
+  // Speeds up duplicate guest-lead checks (same property + email in a time window)
+  @@index([propertyId, guestEmail])
+}
+
+model PropertyFavorite {
+  userId     String
+  propertyId String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@id([userId, propertyId])
+  @@index([userId])
+}
+
+/// Buyer expressed interest — visible to the seller (unlike favorites).
+model PropertyInterest {
+  userId     String
+  propertyId String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@id([userId, propertyId])
+  @@index([propertyId])
+  @@index([userId])
+}
+
+model PropertyLeadMessage {
+  id        String       @id @default(uuid())
+  leadId    String
+  lead      PropertyLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  message   String
+  fromOwner Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  @@index([leadId])
+}
+
+// =============================================================================
+// 5. SUBSCRIPTIONS
+// =============================================================================
+
+model Plan {
+  id           Int      @id @default(autoincrement())
+  name         String
+  price        Decimal
+  postLimit    Int?
+  validityDays Int?
+  createdAt    DateTime @default(now())
+
+  subscriptions UserSubscription[]
+}
+
+model UserSubscription {
+  id        String            @id @default(uuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId    Int?
+  plan      Plan?             @relation(fields: [planId], references: [id])
+  startDate DateTime?
+  endDate   DateTime?
+  status    SubscriptionStatus @default(ACTIVE)
+  createdAt DateTime          @default(now())
+}
+
+// =============================================================================
+// 6. ACTIVITY & AUDIT
+// =============================================================================
+
+model ActivityLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  entityType String?
+  entityId   String?
+  action     String?
+  metadata   String?  // JSON
+  createdAt  DateTime @default(now())
+}
+
+// =============================================================================
+// 7. NOTIFICATIONS
+// =============================================================================
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   @default("GENERAL")
+  title     String?
+  message   String?
+  level     String?  @default("info") // info, success, warning, error
+  actionUrl String?
+  data      Json?
+  isRead    Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model NotificationPreference {
+  id      String   @id @default(uuid())
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type    String
+  inApp   Boolean  @default(true)
+  push    Boolean  @default(true)
+  email   Boolean  @default(true)
+
+  @@unique([userId, type])
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  platform  String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// =============================================================================
+// 8. REPORTS (moderation v1)
+// =============================================================================
+
+model Report {
+  id                 String                  @id @default(uuid())
+  reporterId         String
+  reporter           User                    @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetType         ReportTargetType
+  targetId           String
+  reason             ReportReason
+  description        String?
+  status             ReportStatus            @default(PENDING)
+  priority           ReportPriority          @default(MEDIUM)
+  reviewedById       String?
+  reviewedBy         User?                   @relation("ReportReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt         DateTime?
+  resolutionAction   ReportResolutionAction?
+  adminNotes         String?
+  createdAt          DateTime                @default(now())
+
+  @@unique([reporterId, targetId])
+  @@index([status])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+model ModerationLog {
+  id             String      @id @default(uuid())
+  adminId        String
+  admin          User        @relation("ModerationLogAdmin", fields: [adminId], references: [id])
+  targetType     ReportTargetType
+  targetId       String
+  actionType     ReportResolutionAction
+  reason         String?
+  adminNotes     String?
+  metadata       String?     // JSON representation of extra context (days, etc)
+  createdAt      DateTime    @default(now())
+
+  @@index([adminId])
+  @@index([targetType, targetId])
+}
+
+
+// =============================================================================
+// 9. SYSTEM CONFIG (DB-driven settings)
+// =============================================================================
+
+model SystemConfig {
+  key         String   @id
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+
+// =============================================================================
+// 10. TOKEN WALLET
+// =============================================================================
+
+model CreditTransaction {
+  id            String                     @id @default(uuid())
+  userId        String
+  user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  idempotencyKey String?                   @unique
+  source        String?
+  type          CreditTransactionType
+  direction     WalletTransactionDirection
+  amount        Int
+  balanceBefore Int
+  balanceAfter  Int
+  description   String?
+  metadata      Json?
+  expiresAt     DateTime?
+  referralId    String?
+  referral      ReferralRecord?            @relation(fields: [referralId], references: [id])
+  property      Property?
+  purchase      CreditPurchase?
+  createdAt     DateTime                   @default(now())
+
+  @@index([userId])
+  @@index([userId, idempotencyKey])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// 11. REFERRAL SYSTEM
+// =============================================================================
+
+model ReferralRecord {
+  id             String         @id @default(uuid())
+  referrerId     String
+  referrer       User           @relation("ReferrerRecords", fields: [referrerId], references: [id], onDelete: Cascade)
+  refereeId      String         @unique
+  referee        User           @relation("RefereeRecord", fields: [refereeId], references: [id], onDelete: Cascade)
+  referralCode   String
+  status         ReferralStatus @default(PENDING)
+  qualifiedAt    DateTime?
+  expiresAt      DateTime
+  referrerReward Int            @default(0)
+  refereeReward  Int            @default(0)
+  fraudScore     Int            @default(0)
+  fraudFlags     String?        // JSON array string
+  referralIp     String?
+  signupIp       String?
+  userAgent      String?
+  adminNote      String?
+  creditTransactions CreditTransaction[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([referrerId])
+  @@index([referralCode])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CreditConfig {
+  id                    String   @id @default("singleton")
+  signupBonus           Int      @default(5)
+  creditsPerListing     Int      @default(1)
+  referrerReward        Int      @default(3)
+  refereeBonus          Int      @default(1)
+  graceListings         Int      @default(2)
+
+  // Policy Engine Expansion
+  listingCostCredits    Int      @default(1)
+  listingVisibilityDays Int      @default(30)
+  postCostCredits       Int      @default(1)
+  postVisibilityDays    Int      @default(30)
+  newUserGrantListings  Int      @default(5)
+  newUserGrantDays      Int      @default(30)
+  refereeGrantListings  Int      @default(5)
+  referralTiers         Json?
+  campaignBonusMultiplier Float    @default(1.0)
+  campaignStartAt       DateTime?
+  campaignEndAt         DateTime?
+  fraudAutoHoldScore    Int      @default(70)
+  enableCreditExpiry    Boolean  @default(false)
+
+  maxReferralsPerUser   Int?
+  referralExpiryDays    Int      @default(30)
+  dailyEarnCap          Int      @default(10)
+  isActive              Boolean  @default(true)
+  updatedAt             DateTime @updatedAt
+}
+
+model CreditPurchase {
+  id               String            @id @default(uuid())
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bundleId         String
+  creditsPurchased Int
+  amountInr        Int               // In paise
+  gateway          String            // RAZORPAY, STRIPE, etc.
+  gatewayOrderId   String?
+  gatewayPaymentId String?
+  paymentStatus    String            @default("INITIATED") // INITIATED, COMPLETED, FAILED
+  transactionId    String?           @unique
+  transaction      CreditTransaction? @relation(fields: [transactionId], references: [id])
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([paymentStatus])
+}

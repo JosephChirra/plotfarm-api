@@ -1,0 +1,34 @@
+# =============================================================================
+# PlotFarm Estate — Production docker-compose (EC2 / dev environment)
+# Uses RDS for Postgres (external). No db service here.
+# =============================================================================
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: plotfarm-api:latest
+    container_name: plotfarm_api
+    restart: always
+    env_file:
+      - ./.env.dev
+    ports:
+      - "127.0.0.1:3001:3001"   # bind to localhost only — Nginx proxies externally
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  uploads_data:
